@@ -10,21 +10,25 @@ enum class SVGRenderMode {
     Clipping
 };
 
+class SVGFilterElement;
+
 class SVGBlendInfo {
 public:
     explicit SVGBlendInfo(const SVGElement* element);
-    SVGBlendInfo(const SVGClipPathElement* clipper, const SVGMaskElement* masker, float opacity)
-        : m_clipper(clipper), m_masker(masker), m_opacity(opacity)
+    SVGBlendInfo(const SVGClipPathElement* clipper, const SVGMaskElement* masker, const SVGFilterElement* filter, float opacity)
+        : m_clipper(clipper), m_masker(masker), m_filter(filter), m_opacity(opacity)
     {}
 
     bool requiresCompositing(SVGRenderMode mode) const;
     const SVGClipPathElement* clipper() const { return m_clipper; }
     const SVGMaskElement* masker() const { return m_masker; }
+    const SVGFilterElement* filter() const { return m_filter; }
     float opacity() const { return m_opacity; }
 
 private:
     const SVGClipPathElement* m_clipper;
     const SVGMaskElement* m_masker;
+    const SVGFilterElement* m_filter;
     const float m_opacity;
 };
 
@@ -32,11 +36,12 @@ class SVGRenderState {
 public:
     SVGRenderState(const SVGElement* element, const SVGRenderState& parent, const Transform& localTransform)
         : m_element(element), m_parent(&parent), m_currentTransform(parent.currentTransform() * localTransform)
-        , m_mode(parent.mode()), m_canvas(parent.canvas())
+        , m_mode(parent.mode()), m_canvas(parent.canvas()), m_filterDepth(parent.filterDepth())
     {}
 
     SVGRenderState(const SVGElement* element, const SVGRenderState* parent, const Transform& currentTransform, SVGRenderMode mode, std::shared_ptr<Canvas> canvas)
         : m_element(element), m_parent(parent), m_currentTransform(currentTransform), m_mode(mode), m_canvas(std::move(canvas))
+        , m_filterDepth(parent ? parent->filterDepth() : 0)
     {}
 
     Canvas& operator*() const { return *m_canvas; }
@@ -45,13 +50,16 @@ public:
     const SVGElement* element() const { return m_element; }
     const SVGRenderState* parent() const { return m_parent; }
     const Transform& currentTransform() const { return m_currentTransform; }
-    const SVGRenderMode mode() const { return m_mode; }
+    SVGRenderMode mode() const { return m_mode; }
     const std::shared_ptr<Canvas>& canvas() const { return m_canvas; }
 
     Rect fillBoundingBox() const { return m_element->fillBoundingBox(); }
     Rect paintBoundingBox() const { return m_element->paintBoundingBox(); }
 
     bool hasCycleReference(const SVGElement* element) const;
+    int filterDepth() const { return m_filterDepth; }
+    int enterFilter() { return ++m_filterDepth; }
+    void leaveFilter() { --m_filterDepth; }
 
     void beginGroup(const SVGBlendInfo& blendInfo);
     void endGroup(const SVGBlendInfo& blendInfo);
@@ -62,6 +70,7 @@ private:
     const Transform m_currentTransform;
     const SVGRenderMode m_mode;
     std::shared_ptr<Canvas> m_canvas;
+    int m_filterDepth = 0;
 };
 
 } // namespace lunasvg

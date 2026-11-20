@@ -27,6 +27,8 @@ enum class PropertyID : uint8_t {
     Fill,
     Fill_Opacity,
     Fill_Rule,
+    Filter,
+    FilterUnits,
     Font_Family,
     Font_Size,
     Font_Style,
@@ -93,7 +95,11 @@ enum class PropertyID : uint8_t {
     X2,
     Y,
     Y1,
-    Y2
+    Y2,
+    In,
+    Result,
+    StdDeviation,
+    PrimitiveUnits
 };
 
 PropertyID propertyid(std::string_view name);

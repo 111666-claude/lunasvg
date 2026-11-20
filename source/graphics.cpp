@@ -3,6 +3,7 @@
 
 #include <cfloat>
 #include <cmath>
+#include <cstring>
 
 namespace lunasvg {
 
@@ -627,6 +628,19 @@ void Canvas::blendCanvas(const Canvas& canvas, BlendMode blendMode, float opacit
     plutovg_canvas_paint(m_canvas);
 }
 
+void Canvas::drawCanvas(const Canvas& canvas, float dx, float dy)
+{
+    plutovg_matrix_t matrix = {
+        1, 0, 0, 1,
+        static_cast<float>(canvas.x()) + dx,
+        static_cast<float>(canvas.y()) + dy
+    };
+    plutovg_canvas_set_matrix(m_canvas, &m_translation);
+    plutovg_canvas_set_operator(m_canvas, PLUTOVG_OPERATOR_SRC_OVER);
+    plutovg_canvas_set_texture(m_canvas, canvas.surface(), PLUTOVG_TEXTURE_TYPE_PLAIN, 1.f, &matrix);
+    plutovg_canvas_paint(m_canvas);
+}
+
 void Canvas::save()
 {
     plutovg_canvas_save(m_canvas);
@@ -671,6 +685,136 @@ void Canvas::convertToLuminanceMask()
             pixels[x] = static_cast<uint32_t>(l * (a / 255.0)) << 24;
         }
     }
+}
+
+// SourceAlpha: keeps the (premultiplied) alpha, clears the colour channels.
+void Canvas::convertToAlpha()
+{
+    auto width = plutovg_surface_get_width(m_surface);
+    auto height = plutovg_surface_get_height(m_surface);
+    auto stride = plutovg_surface_get_stride(m_surface);
+    auto data = plutovg_surface_get_data(m_surface);
+    for(int y = 0; y < height; y++) {
+        auto pixels = reinterpret_cast<uint32_t*>(data + stride * y);
+        for(int x = 0; x < width; x++)
+            pixels[x] &= 0xFF000000u;
+    }
+}
+
+// One dimension of a box blur with edge replication. Pixels are premultiplied
+// ARGB32, so each channel is accumulated independently with plain integer math.
+static void boxBlurPass(const std::vector<uint32_t>& src, std::vector<uint32_t>& dst,
+    int width, int height, int radius, bool horizontal)
+{
+    const int diameter = radius * 2 + 1;
+    if(horizontal) {
+        for(int y = 0; y < height; y++) {
+            const uint32_t* row = src.data() + static_cast<size_t>(y) * width;
+            uint32_t* out = dst.data() + static_cast<size_t>(y) * width;
+            int sumR = 0, sumG = 0, sumB = 0, sumA = 0;
+            for(int i = -radius; i <= radius; i++) {
+                auto p = row[std::clamp(i, 0, width - 1)];
+                sumA += (p >> 24) & 0xFF;
+                sumR += (p >> 16) & 0xFF;
+                sumG += (p >> 8) & 0xFF;
+                sumB += p & 0xFF;
+            }
+
+            for(int x = 0; x < width; x++) {
+                out[x] = static_cast<uint32_t>(sumA / diameter) << 24
+                    | static_cast<uint32_t>(sumR / diameter) << 16
+                    | static_cast<uint32_t>(sumG / diameter) << 8
+                    | static_cast<uint32_t>(sumB / diameter);
+
+                auto inPixel = row[std::clamp(x + radius + 1, 0, width - 1)];
+                auto outPixel = row[std::clamp(x - radius, 0, width - 1)];
+                sumA += static_cast<int>((inPixel >> 24) & 0xFF) - static_cast<int>((outPixel >> 24) & 0xFF);
+                sumR += static_cast<int>((inPixel >> 16) & 0xFF) - static_cast<int>((outPixel >> 16) & 0xFF);
+                sumG += static_cast<int>((inPixel >> 8) & 0xFF) - static_cast<int>((outPixel >> 8) & 0xFF);
+                sumB += static_cast<int>(inPixel & 0xFF) - static_cast<int>(outPixel & 0xFF);
+            }
+        }
+    } else {
+        for(int x = 0; x < width; x++) {
+            int sumR = 0, sumG = 0, sumB = 0, sumA = 0;
+            for(int i = -radius; i <= radius; i++) {
+                auto p = src[static_cast<size_t>(std::clamp(i, 0, height - 1)) * width + x];
+                sumA += (p >> 24) & 0xFF;
+                sumR += (p >> 16) & 0xFF;
+                sumG += (p >> 8) & 0xFF;
+                sumB += p & 0xFF;
+            }
+
+            for(int y = 0; y < height; y++) {
+                dst[static_cast<size_t>(y) * width + x] =
+                    static_cast<uint32_t>(sumA / diameter) << 24
+                    | static_cast<uint32_t>(sumR / diameter) << 16
+                    | static_cast<uint32_t>(sumG / diameter) << 8
+                    | static_cast<uint32_t>(sumB / diameter);
+
+                auto inPixel = src[static_cast<size_t>(std::clamp(y + radius + 1, 0, height - 1)) * width + x];
+                auto outPixel = src[static_cast<size_t>(std::clamp(y - radius, 0, height - 1)) * width + x];
+                sumA += static_cast<int>((inPixel >> 24) & 0xFF) - static_cast<int>((outPixel >> 24) & 0xFF);
+                sumR += static_cast<int>((inPixel >> 16) & 0xFF) - static_cast<int>((outPixel >> 16) & 0xFF);
+                sumG += static_cast<int>((inPixel >> 8) & 0xFF) - static_cast<int>((outPixel >> 8) & 0xFF);
+                sumB += static_cast<int>(inPixel & 0xFF) - static_cast<int>(outPixel & 0xFF);
+            }
+        }
+    }
+}
+
+// A Gaussian blur approximated by three box blurs per axis
+// (SVG 1.1 feGaussianBlur, equivalent to the approach used by browsers).
+// Works directly on premultiplied pixels, which keeps semi-transparent edges
+// free of dark halos.
+void Canvas::gaussianBlur(float stdDeviationX, float stdDeviationY)
+{
+    auto width = plutovg_surface_get_width(m_surface);
+    auto height = plutovg_surface_get_height(m_surface);
+    if(width <= 0 || height <= 0)
+        return;
+    if(!std::isfinite(stdDeviationX) || !std::isfinite(stdDeviationY))
+        return;
+    stdDeviationX = std::clamp(stdDeviationX, 0.f, static_cast<float>(std::max(width, height)));
+    stdDeviationY = std::clamp(stdDeviationY, 0.f, static_cast<float>(std::max(width, height)));
+    if(stdDeviationX == 0.f && stdDeviationY == 0.f)
+        return;
+
+    auto stride = plutovg_surface_get_stride(m_surface);
+    auto data = plutovg_surface_get_data(m_surface);
+    const size_t pixelCount = static_cast<size_t>(width) * height;
+    std::vector<uint32_t> source(pixelCount);
+    for(int y = 0; y < height; y++)
+        std::memcpy(source.data() + static_cast<size_t>(y) * width, data + stride * y, static_cast<size_t>(width) * sizeof(uint32_t));
+
+    std::vector<uint32_t> bufferA(pixelCount);
+
+    auto boxRadius = [](float sigma) -> int {
+        if(sigma <= 0.f)
+            return 0;
+        // Three box-blur passes approximate a Gaussian (SVG 1.1 feGaussianBlur).
+        // The combined variance of n box filters of width w is n(w^2-1)/12,
+        // so solving for w with n = 3 gives w = sqrt(4 sigma^2 + 1) and the
+        // box radius is (w - 1) / 2, i.e. approximately sigma.
+        auto boxWidth = std::sqrt(4.f * sigma * sigma + 1.f);
+        return std::max(static_cast<int>(std::round((boxWidth - 1.f) / 2.f)), 0);
+    };
+
+    auto runAxis = [&](float sigma, bool horizontal, int maxRadius) {
+        auto radius = std::min(boxRadius(sigma), maxRadius);
+        if(radius <= 0)
+            return;
+        for(int pass = 0; pass < 3; pass++) {
+            boxBlurPass(source, bufferA, width, height, radius, horizontal);
+            source.swap(bufferA);
+        }
+    };
+
+    runAxis(stdDeviationX, true, width - 1);
+    runAxis(stdDeviationY, false, height - 1);
+
+    for(int y = 0; y < height; y++)
+        std::memcpy(data + stride * y, source.data() + static_cast<size_t>(y) * width, static_cast<size_t>(width) * sizeof(uint32_t));
 }
 
 Canvas::~Canvas()

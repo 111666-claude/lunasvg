@@ -1,5 +1,6 @@
 #include "svgelement.h"
 #include "svgpaintelement.h"
+#include "svgfilterelement.h"
 #include "svggeometryelement.h"
 #include "svgtextelement.h"
 #include "svgproperty.h"
@@ -21,6 +22,11 @@ ElementID elementid(std::string_view name)
         {"clipPath", ElementID::ClipPath},
         {"defs", ElementID::Defs},
         {"ellipse", ElementID::Ellipse},
+        {"feGaussianBlur", ElementID::FeGaussianBlur},
+        {"feMerge", ElementID::FeMerge},
+        {"feMergeNode", ElementID::FeMergeNode},
+        {"feOffset", ElementID::FeOffset},
+        {"filter", ElementID::Filter},
         {"g", ElementID::G},
         {"image", ElementID::Image},
         {"line", ElementID::Line},
@@ -106,6 +112,16 @@ std::unique_ptr<SVGElement> SVGElement::create(Document* document, ElementID id)
         return std::make_unique<SVGMaskElement>(document);
     case ElementID::ClipPath:
         return std::make_unique<SVGClipPathElement>(document);
+    case ElementID::Filter:
+        return std::make_unique<SVGFilterElement>(document);
+    case ElementID::FeGaussianBlur:
+        return std::make_unique<SVGFEGaussianBlurElement>(document);
+    case ElementID::FeOffset:
+        return std::make_unique<SVGFeOffsetElement>(document);
+    case ElementID::FeMerge:
+        return std::make_unique<SVGFeMergeElement>(document);
+    case ElementID::FeMergeNode:
+        return std::make_unique<SVGFeMergeNodeElement>(document);
     case ElementID::Marker:
         return std::make_unique<SVGMarkerElement>(document);
     case ElementID::Image:
@@ -350,6 +366,14 @@ SVGMaskElement* SVGElement::getMasker(std::string_view id) const
     return nullptr;
 }
 
+SVGFilterElement* SVGElement::getFilter(std::string_view id) const
+{
+    auto element = rootElement()->getElementById(id);
+    if(element && element->id() == ElementID::Filter)
+        return static_cast<SVGFilterElement*>(element);
+    return nullptr;
+}
+
 SVGPaintElement* SVGElement::getPainter(std::string_view id) const
 {
     auto element = rootElement()->getElementById(id);
@@ -454,6 +478,7 @@ void SVGElement::layoutElement(const SVGLayoutState& state)
     m_paintBoundingBox = Rect::Invalid;
     m_clipper = getClipper(state.clip_path());
     m_masker = getMasker(state.mask());
+    m_filter = getFilter(state.filter());
     m_opacity = state.opacity();
 
     m_font_size = state.font_size();
@@ -502,6 +527,11 @@ bool SVGElement::isHiddenElement() const
     case ElementID::Marker:
     case ElementID::ClipPath:
     case ElementID::Mask:
+    case ElementID::Filter:
+    case ElementID::FeGaussianBlur:
+    case ElementID::FeOffset:
+    case ElementID::FeMerge:
+    case ElementID::FeMergeNode:
     case ElementID::LinearGradient:
     case ElementID::RadialGradient:
     case ElementID::Pattern:

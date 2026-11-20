@@ -90,6 +90,11 @@ enum class ElementID : uint8_t {
     Ellipse,
     G,
     Image,
+    Filter,
+    FeGaussianBlur,
+    FeMerge,
+    FeMergeNode,
+    FeOffset,
     Line,
     LinearGradient,
     Marker,
@@ -117,6 +122,7 @@ using SVGPropertyList = std::forward_list<SVGProperty*>;
 class SVGMarkerElement;
 class SVGClipPathElement;
 class SVGMaskElement;
+class SVGFilterElement;
 class SVGPaintElement;
 class SVGLayoutState;
 class SVGRenderState;
@@ -163,6 +169,7 @@ public:
     SVGMarkerElement* getMarker(std::string_view id) const;
     SVGClipPathElement* getClipper(std::string_view id) const;
     SVGMaskElement* getMasker(std::string_view id) const;
+    SVGFilterElement* getFilter(std::string_view id) const;
     SVGPaintElement* getPainter(std::string_view id) const;
 
     SVGElement* elementFromPoint(float x, float y);
@@ -196,6 +203,7 @@ public:
 
     const SVGClipPathElement* clipper() const { return m_clipper; }
     const SVGMaskElement* masker() const { return m_masker; }
+    const SVGFilterElement* filter() const { return m_filter; }
     float opacity() const { return m_opacity; }
 
     bool isElement() const final { return true; }
@@ -204,6 +212,7 @@ private:
     mutable Rect m_paintBoundingBox = Rect::Invalid;
     const SVGClipPathElement* m_clipper = nullptr;
     const SVGMaskElement* m_masker = nullptr;
+    const SVGFilterElement* m_filter = nullptr;
     float m_opacity = 1.f;
 
     float m_font_size = 12.f;

@@ -531,11 +531,14 @@ public:
 
     void drawImage(const Bitmap& image, const Rect& dstRect, const Rect& srcRect, const Transform& transform);
     void blendCanvas(const Canvas& canvas, BlendMode blendMode, float opacity);
+    void drawCanvas(const Canvas& canvas, float dx, float dy);
 
     void save();
     void restore();
 
     void convertToLuminanceMask();
+    void convertToAlpha();
+    void gaussianBlur(float stdDeviationX, float stdDeviationY);
 
     int x() const { return m_x; }
     int y() const { return m_y; }
